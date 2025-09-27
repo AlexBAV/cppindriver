@@ -8,8 +8,8 @@
 
 #pragma once
 
+// Define supported OS version
 #define DECLSPEC_DEPRECATED_DDK
-
 #define _WIN32_WINNT _WIN32_WINNT_WIN10
 #define NTDDI_VERSION NTDDI_WIN10_RS3
 #include <sdkddkver.h>
@@ -37,6 +37,9 @@
 // If you are using boost, the following may also be required
 #define BOOST_DISABLE_ASSERTS
 
+// Define architecture type as required by WDM
 #if defined(_M_AMD64)
 #define _AMD64_
+#elif defined(_M_ARM64)
+#define _ARM64_
 #endif

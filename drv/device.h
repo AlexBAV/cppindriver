@@ -206,7 +206,12 @@ namespace drv
 			{
 				return static_cast<Derived *>(static_cast<IDevice *>(obj->DeviceExtension));
 			}
-			////////////////////////
+
+			template<class...Args>
+			static Derived *create_device_object(PDEVICE_OBJECT pdo, Args &&...args) noexcept
+			{
+				return std::construct_at(from_device_object(pdo), std::forward<Args>(args)...);
+			}
 		};
 
 		template<class Derived>

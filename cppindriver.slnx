@@ -19,7 +19,5 @@
   <Folder Name="/Solution Items/">
     <File Path=".editorconfig" />
   </Folder>
-  <Project Path="wdm/filter/filter.vcxproj" Id="4b38870e-20a4-4da6-9708-4b6dadff6378">
-    <Platform Solution="Release|ARM64" Project="x64" />
-  </Project>
+  <Project Path="wdm/filter/filter.vcxproj" Id="4b38870e-20a4-4da6-9708-4b6dadff6378" />
 </Solution>

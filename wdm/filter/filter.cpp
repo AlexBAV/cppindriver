@@ -62,7 +62,7 @@ NTSTATUS Driver_AddDevice(PDRIVER_OBJECT DriverObject, PDEVICE_OBJECT pdo)
 		return STATUS_DELETE_PENDING;
 	}
 
-	std::construct_at(static_cast<filter_device_t *>(fido->DeviceExtension), pdo, fido, nextdo);
+	filter_device_t::create_device_object(fido, pdo, fido, nextdo);
 	return STATUS_SUCCESS;
 }
 

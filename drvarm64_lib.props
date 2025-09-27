@@ -5,6 +5,10 @@
   <PropertyGroup>
     <LibraryPath>C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\km\arm64;C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\ucrt\arm64</LibraryPath>
   </PropertyGroup>
-  <ItemDefinitionGroup />
+  <ItemDefinitionGroup>
+    <Link>
+      <AdditionalDependencies>ntoskrnl.lib;hal.lib;Ntstrsafe.lib;libcntpr.lib</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
   <ItemGroup />
 </Project>
