@@ -67,7 +67,7 @@ Apart from that, we can use any Standard Library class or function that could be
 
 ### It all Starts with an Allocator
 
-If we talk about C++, the first thing we need is an allocator. Runtime library provides the default allocator for all C++ programs, however, we cannot use Runtime library at all. We need to declaring the following global functions:
+If we talk about C++, the first thing we need is an allocator. Runtime library provides the default allocator for all C++ programs, however, we cannot use Runtime library at all. We need to declare the following global functions:
 
 ```cpp
 enum class pool_type
@@ -91,3 +91,85 @@ extern void operator delete[](void *ptr, size_t) noexcept;
 
 Their implementations can be found in `allocator_impl.h` header, which is supposed to be included in one of the driver's source files. The default allocator uses non-paged pool, but there are overloads that accept the pool type, allowing you to construct objects on the paged pool, if required.
 
+### Standard Windows DDK Project Templates
+
+Unfortunately, I was not successful in using any predefined project templates from Windows DDK integration with Visual Studio. Using them produced a lot of conflicts when I tried to include standard library headers. 
+
+As a result, both WDM and KMDF drivers do not use standard templates. Usually, that is not a big problem. Personally, I find them too obtrusive: they not only configure your compilation environment, but also try to deal with INF file preparation, checking, signing and so on, tasks that I prefer to automate with the help of other tools.
+
+In "manual" mode, prepare to handler header file dependencies, library file dependencies as well as manually providing a list of import libraries for linking, as we would have to turn the "Ignore Default Libraries" linker option on.
+
+### Preprocessor Defines
+
+While a standard library is now more "friendly" to kernel-mode development, we still need to fine-tune it a bit. Unfortunately, this is something that might need to be revisited each time you upgrade to the new compiler version or SDK version, so be prepared. Add the following defines to your central header:
+
+```cpp
+// Set the minimum supported OS version
+#define _WIN32_WINNT _WIN32_WINNT_WIN10
+#define NTDDI_VERSION NTDDI_WIN10_RS3
+#include <sdkddkver.h>
+
+// Disable all debug STL machinery
+// This will allow us to safely compile debug versions of our driver
+#if _MSC_VER >= 1944
+#define _MSVC_STL_HARDENING 0
+#define _MSVC_STL_DOOM_FUNCTION(expr)
+#else
+#define _CONTAINER_DEBUG_LEVEL 0
+#define _ITERATOR_DEBUG_LEVEL 0
+#define _STL_CRT_SECURE_INVALID_PARAMETER(expr) 
+#endif
+
+// Disable call to invalid_parameter runtime function, used in Debug
+#define _CRT_SECURE_INVALID_PARAMETER(expr)
+
+// Prevent atomic from referencing CRT's invalid_parameter function
+#define _INVALID_MEMORY_ORDER
+
+// Use assert from wdm.h header
+#define assert NT_ASSERT
+
+// If you are using boost, the following may also be required
+#define BOOST_DISABLE_ASSERTS
+```
+
+Add the following overrides to one of the source files. This will allow successful compilation in DEBUG mode:
+
+```cpp
+#if defined(_DEBUG)
+int __cdecl _CrtDbgReport(
+	[[maybe_unused]] int         _ReportType,
+	[[maybe_unused]] char const *_FileName,
+	[[maybe_unused]] int         _Linenumber,
+	[[maybe_unused]] char const *_ModuleName,
+	[[maybe_unused]] char const *_Format,
+	...)
+{
+	return 0;
+}
+
+int __cdecl _CrtDbgReportW(
+	[[maybe_unused]] int            _ReportType,
+	[[maybe_unused]] wchar_t const *_FileName,
+	[[maybe_unused]] int            _LineNumber,
+	[[maybe_unused]] wchar_t const *_ModuleName,
+	[[maybe_unused]] wchar_t const *_Format,
+	...)
+{
+	return 0;
+}
+
+extern "C" void __cdecl __security_init_cookie(void)
+{
+}
+
+void __cdecl _wassert(
+	[[maybe_unused]] wchar_t const *_Message,
+	[[maybe_unused]] wchar_t const *_File,
+	[[maybe_unused]] unsigned       _Line
+)
+{
+}
+
+#endif
+```
