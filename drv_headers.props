@@ -1,0 +1,23 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+	<ImportGroup Label="PropertySheets" />
+	<PropertyGroup Label="UserMacros" />
+	<PropertyGroup>
+		<IncludePath>C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\km;$(SolutionDir)</IncludePath>
+	</PropertyGroup>
+	<ItemDefinitionGroup>
+		<ClCompile>
+			<WarningLevel>Level4</WarningLevel>
+			<AdditionalOptions>/kernel %(AdditionalOptions)</AdditionalOptions>
+			<EnforceTypeConversionRules>true</EnforceTypeConversionRules>
+			<LanguageStandard>stdcpplatest</LanguageStandard>
+			<BuildStlModules>false</BuildStlModules>
+		</ClCompile>
+		<Link>
+			<AdditionalDependencies>ntoskrnl.lib;hal.lib</AdditionalDependencies>
+			<IgnoreAllDefaultLibraries>true</IgnoreAllDefaultLibraries>
+			<AdditionalOptions>/driver:WDM %(AdditionalOptions)</AdditionalOptions>
+		</Link>
+	</ItemDefinitionGroup>
+	<ItemGroup />
+</Project>
