@@ -200,10 +200,11 @@ extern "C" NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, [[maybe_unused]] PU
 	PAGED_CODE();
 
 	// Set dispatch routines
-	sr::fill(sr::subrange(DriverObject->MajorFunction, DriverObject->MajorFunction + IRP_MJ_MAXIMUM_FUNCTION + 1), [](PDEVICE_OBJECT DeviceObject, PIRP Irp) noexcept
-	{
-		return static_cast<drv::IDevice *>(DeviceObject->DeviceExtension)->drv_dispatch(Irp);
-	});
+	sr::fill(sr::subrange(DriverObject->MajorFunction, DriverObject->MajorFunction + IRP_MJ_MAXIMUM_FUNCTION + 1), 
+		[](PDEVICE_OBJECT DeviceObject, PIRP Irp) noexcept
+		{
+			return static_cast<drv::IDevice *>(DeviceObject->DeviceExtension)->drv_dispatch(Irp);
+		});
 
 	// Set AddDevice routine
 	DriverObject->DriverExtension->AddDevice = Driver_AddDevice;
@@ -211,7 +212,7 @@ extern "C" NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, [[maybe_unused]] PU
 }
 ```
 
-Each device object the driver defines must derive from the `IDevice` interface (aka abstract base class). 
+Each device object class the driver defines must derive from the `IDevice` interface (aka abstract base class). 
 
 #### Function Device Objects
 
@@ -219,7 +220,7 @@ A function device object class must derive from `device_t<Derived>` template cla
 
 #### Filter Device Objects
 
-A filter device object class must derive from `basic_filter_device_t<Derived>` template class
+A filter device object class must derive from `basic_filter_device_t<Derived>` template class. Example from the filter sample driver:
 
 ```cpp
 class filter_device_t : public drv::basic_filter_device_t<filter_device_t>
