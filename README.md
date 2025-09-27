@@ -280,3 +280,48 @@ And create a C++ device object, associated with created kernel device object (th
 ```cpp
 filter_device_t::create_device_object(fido, pdo, fido, nextdo);
 ```
+
+### Destroying Device Objects
+
+The lifetime of a C++ device class is bound to the lifetime of the kernel device object. The actual physical storage of a C++ object is within the device extension of the device object, therefore, we must be very careful when accessing it at the time device object is deleted.
+
+The library provides support for destroying C++ device object with a call to `device_t::delete_device(PIRP)` function. When this function returns, C++ device object cannot be used anymore.
+
+The time this function is called depends on the device object type. The sample filter driver illustrates how you can do it for a filter device object in a completion routine for a PNP request `IRP_MN_REMOVE_DEVICE`:
+
+```cpp
+NTSTATUS filter_device_t::on_pnp_completion(PIRP irp) noexcept
+{
+	if (irp->PendingReturned)
+		IoMarkIrpPending(irp);
+
+	switch (IoGetCurrentIrpStackLocation(irp)->MinorFunction)
+	{
+		...
+	case IRP_MN_REMOVE_DEVICE:
+		// Disable device interface
+		on_device_stopped();
+		// Destroy C++ device object and delete kernel device object
+		// This will also stop and wait on device remove lock
+		return delete_device(irp);
+	}
+
+	// release remove lock and complete
+	release_remove_lock(irp);
+	return STATUS_SUCCESS;
+}
+
+NTSTATUS filter_device_t::drv_dispatch_pnp(PIRP irp) noexcept
+{
+	// acquire device remove lock
+	DISPATCH_PROLOG(irp);
+
+	IoCopyCurrentIrpStackLocationToNext(irp);
+	IoSetCompletionRoutine(irp, [](PDEVICE_OBJECT DeviceObject, PIRP Irp, [[maybe_unused]] PVOID Context) noexcept
+	{
+		return from_device_object(DeviceObject)->on_pnp_completion(Irp);
+	}, nullptr, true, true, true);
+
+	return IoCallDriver(NextDO, irp);
+}
+```
