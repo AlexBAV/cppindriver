@@ -1,0 +1,25 @@
+<Solution>
+  <Configurations>
+    <Platform Name="ARM64" />
+    <Platform Name="x64" />
+  </Configurations>
+  <Folder Name="/drv/">
+    <File Path="drv/allocator.h" />
+    <File Path="drv/allocator_impl.h" />
+    <File Path="drv/csq.h" />
+    <File Path="drv/ctl_code.h" />
+    <File Path="drv/decl.h" />
+    <File Path="drv/decl_impl.h" />
+    <File Path="drv/device.h" />
+    <File Path="drv/guid.h" />
+    <File Path="drv/intdefs.h" />
+    <File Path="drv/ntstatus.h" />
+    <File Path="drv/ustring.h" />
+  </Folder>
+  <Folder Name="/Solution Items/">
+    <File Path=".editorconfig" />
+  </Folder>
+  <Project Path="wdm/filter/filter.vcxproj" Id="4b38870e-20a4-4da6-9708-4b6dadff6378">
+    <Platform Solution="Release|ARM64" Project="x64" />
+  </Project>
+</Solution>
