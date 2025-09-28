@@ -15,7 +15,7 @@ But what would you say, if I tell you that drivers not only can be developed usi
 * `<type_traits>`
 * `<concepts>`
 * `<string_view>`
-* `<utility>`: `std::exchange`, `std::move`, `std::swap`, `std::pair` ...
+* `<utility>`: `std::exchange`, `std::move`, `std::swap`, `std::pair` …
 * `<tuple>`
 * `<optional>`
 * `<variant>`[^variant]
@@ -83,7 +83,13 @@ This repository includes the following samples:
 * `kmdf/function`
 
   Will be added later
-  
+
+## C++? Template Code Bloat!
+
+One of the often heard argument against using C++ in device drivers is that it leads to a code bloat. However, modern compilers are extremely good at optimizing C++ code and we do not link a runtime library, which is usually to blame for "code bloat".
+
+For example, the sample projects compiled for x64 Release target result in 6.5 KB binary for a sample filter driver and 9.5 KB binary for a sample function driver.
+
 ## Implementation
 
 ### It all Starts with an Allocator
@@ -153,6 +159,7 @@ While a standard library is now more "friendly" to kernel-mode development, we s
 
 // If you are using boost, the following may also be required
 #define BOOST_DISABLE_ASSERTS
+#define BOOST_NO_EXCEPTIONS
 
 // Define architecture type as required by WDM
 #if defined(_M_AMD64)
@@ -205,7 +212,7 @@ void __cdecl _wassert(
 
 ### DriverEntry
 
-A WDM driver entry point is called `DriverEntry`. It is very simple for a PNP driver (note the use of lambdas):
+A WDM driver entry point is called `DriverEntry`. It is very simple for a PNP driver. Note that we can freely use standard algorithms, ranges and lambdas in a kernel driver:
 
 ```cpp
 #include <drv/decl_impl.h>

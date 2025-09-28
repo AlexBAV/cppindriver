@@ -16,7 +16,7 @@ namespace drv
 		/// <summary>
 		/// Device distpatch interface
 		/// </summary>
-		struct IDevice
+		struct __declspec(novtable) IDevice
 		{
 			virtual ~IDevice() = default;
 			virtual NTSTATUS drv_dispatch(PIRP irp) noexcept = 0;
@@ -367,7 +367,7 @@ namespace drv
 /// </summary>
 #define DISPATCH_PROLOG(Irp) \
 { \
-	if (auto status = this->acquire_remove_lock((Irp).tag()); !nt_success(status)) \
+	if (auto status = this->acquire_remove_lock((Irp).tag()); !nt_success(status)) [[unlikely]] \
 		return std::move(Irp).complete(status); \
 } \
 // end of macro
