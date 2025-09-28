@@ -18,34 +18,13 @@ class filter_device_t : public drv::basic_filter_device_t<filter_device_t>
 	// Illustrate the usage of std::atomic
 	std::atomic<int> counter{};
 
-	/// <summary>
-	/// This function is called when device is started.
-	/// It registers device interface and activates it
-	/// </summary>
-	void on_device_started() noexcept
-	{
-		drv::sys_unicode_string_t link;
-		if (auto status = IoRegisterDeviceInterface(PDO, &filter::GUID_DEVINTERFACE_MY_FILTER, nullptr, &link); nt_success(status))
-		{
-			devinterface = link;
-			std::ignore = IoSetDeviceInterfaceState(&link, true);
-		}
-	}
-
-	/// <summary>
-	/// This function is called when device is stopped or removed
-	/// It disables the device interface
-	/// </summary>
-	void on_device_stopped() noexcept
-	{
-		std::ignore = IoSetDeviceInterfaceState(&devinterface, false);
-	}
-
+	//
 	NTSTATUS on_pnp_completion(PIRP irp) noexcept;
 
 public:
-	filter_device_t(PDEVICE_OBJECT pdo, PDEVICE_OBJECT fido, PDEVICE_OBJECT nextdo) noexcept :
-		drv::basic_filter_device_t<filter_device_t>{ pdo, fido, nextdo }
+	filter_device_t(PDEVICE_OBJECT pdo, PDEVICE_OBJECT fido, PDEVICE_OBJECT nextdo, std::wstring_view devinterface) noexcept :
+		drv::basic_filter_device_t<filter_device_t>{ pdo, fido, nextdo },
+		devinterface{ devinterface }
 	{
 		auto copiedflags = NextDO->Flags & (DO_BUFFERED_IO | DO_DIRECT_IO);
 		if (!copiedflags)
@@ -74,14 +53,28 @@ NTSTATUS Driver_AddDevice(PDRIVER_OBJECT DriverObject, PDEVICE_OBJECT pdo)
 	if (auto status = IoCreateDevice(DriverObject, sizeof(filter_device_t), nullptr, FILE_DEVICE_UNKNOWN, FILE_DEVICE_SECURE_OPEN, false, &fido); nt_error(status))
 		return status;
 
-	auto nextdo = IoAttachDeviceToDeviceStack(fido, pdo);
-	if (!nextdo)
+	SCOPE_EXIT_CANCELLABLE(c1)
 	{
 		IoDeleteDevice(fido);
-		return STATUS_DELETE_PENDING;
-	}
+	};
 
-	filter_device_t::create_device_object(fido, pdo, fido, nextdo);
+	auto nextdo = IoAttachDeviceToDeviceStack(fido, pdo);
+	if (!nextdo)
+		return STATUS_DELETE_PENDING;
+
+	SCOPE_EXIT_CANCELLABLE(c2)
+	{
+		IoDetachDevice(nextdo);
+	};
+
+	drv::sys_unicode_string_t link;
+	if (auto status = IoRegisterDeviceInterface(pdo, &filter::GUID_DEVINTERFACE_MY_FILTER, nullptr, &link); nt_error(status))
+		return status;
+
+	c2.cancel();
+	c1.cancel();
+
+	filter_device_t::create_device_object(fido, pdo, fido, nextdo, link);
 	return STATUS_SUCCESS;
 }
 
@@ -97,14 +90,14 @@ NTSTATUS filter_device_t::on_pnp_completion(PIRP irp) noexcept
 	{
 	case IRP_MN_START_DEVICE:
 	{
-		on_device_started();
+		std::ignore = IoSetDeviceInterfaceState(&devinterface, true);
 		break;
 	}
 	case IRP_MN_STOP_DEVICE:
-		on_device_stopped();
+		std::ignore = IoSetDeviceInterfaceState(&devinterface, false);
 		break;
 	case IRP_MN_REMOVE_DEVICE:
-		on_device_stopped();
+		std::ignore = IoSetDeviceInterfaceState(&devinterface, false);
 		delete_device(irp);
 		return STATUS_SUCCESS;
 	}

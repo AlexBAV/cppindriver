@@ -212,7 +212,7 @@ void __cdecl _wassert(
 
 ### DriverEntry
 
-A WDM driver entry point is called `DriverEntry`. It is very simple for a PNP driver. Note that we can freely use standard algorithms, ranges and lambdas in a kernel driver:
+A WDM driver entry point is called `DriverEntry`. It is very simple for a PNP driver.
 
 ```cpp
 #include <drv/decl_impl.h>
@@ -227,11 +227,7 @@ extern "C" NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, [[maybe_unused]] PU
 	PAGED_CODE();
 
 	// Set dispatch routines
-	sr::fill(sr::subrange(DriverObject->MajorFunction, DriverObject->MajorFunction + IRP_MJ_MAXIMUM_FUNCTION + 1), 
-		[](PDEVICE_OBJECT DeviceObject, PIRP Irp) noexcept
-		{
-			return static_cast<drv::IDevice *>(DeviceObject->DeviceExtension)->drv_dispatch(Irp);
-		});
+	drv::init_dispatch_routines(DriverObject);
 
 	// Set AddDevice routine
 	DriverObject->DriverExtension->AddDevice = Driver_AddDevice;
@@ -239,7 +235,18 @@ extern "C" NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, [[maybe_unused]] PU
 }
 ```
 
-Each device object class the driver defines must derive from the `IDevice` interface (aka abstract base class). 
+`init_dispatch_routines` implementation illustrates that you can freely use standard algorithms, ranges and lambdas in a kernel driver:
+
+```cpp
+inline void init_dispatch_routines(PDRIVER_OBJECT DriverObject) noexcept
+{
+	// Set dispatch routines
+	sr::fill(sr::subrange(DriverObject->MajorFunction, DriverObject->MajorFunction + IRP_MJ_MAXIMUM_FUNCTION + 1), [](PDEVICE_OBJECT DeviceObject, PIRP Irp) noexcept
+	{
+		return static_cast<IDevice *>(DeviceObject->DeviceExtension)->drv_dispatch(Irp);
+	});
+}
+```
 
 #### Function Device Objects
 
@@ -249,7 +256,7 @@ A function device object class must derive from `device_t<Derived>` template cla
 class function_device_t : public drv::device_t<function_device_t>
 {
 	...
-		function_device_t(PDEVICE_OBJECT pdo, PDEVICE_OBJECT fdo, PDEVICE_OBJECT nextdo, std::wstring_view devinterface) noexcept :
+	function_device_t(PDEVICE_OBJECT pdo, PDEVICE_OBJECT fdo, PDEVICE_OBJECT nextdo, std::wstring_view devinterface) noexcept :
 		drv::device_t<function_device_t>{ fdo },
 		pdo{ pdo },
 		nextdo{ nextdo },
@@ -282,6 +289,7 @@ public:
 	{
 		...
 	}
+	...
 };
 ```
 
@@ -291,26 +299,49 @@ Device object class can override any dispatch routine[^dispatch] by declaring a 
 
 ### Creating Device Objects
 
-Here's the implementation of `Driver_AddDevice` routine for a sample filter driver:
+Here's the implementation of `Driver_AddDevice` routine for a sample function driver:
 
 ```cpp
 NTSTATUS Driver_AddDevice(PDRIVER_OBJECT DriverObject, PDEVICE_OBJECT pdo)
 {
-	// Create kernel device object, passing the size of C++ class
-	PDEVICE_OBJECT fido;
-	if (auto status = IoCreateDevice(DriverObject, sizeof(filter_device_t), nullptr, FILE_DEVICE_UNKNOWN, FILE_DEVICE_SECURE_OPEN, false, &fido); nt_error(status))
+	// AddDevice is called at PASSIVE_LEVEL
+	PAGED_CODE();
+
+	// Create kernel device object
+	PDEVICE_OBJECT fdo;
+	if (auto status = IoCreateDevice(DriverObject, sizeof(function_device_t), nullptr, 
+		FILE_DEVICE_UNKNOWN, FILE_DEVICE_SECURE_OPEN, false, &fdo); nt_error(status))
 		return status;
 
-	// Attach device to device stack
-	auto nextdo = IoAttachDeviceToDeviceStack(fido, pdo);
-	if (!nextdo)
+	// Delete created device on error
+	SCOPE_EXIT_CANCELLABLE(c1)
 	{
-		IoDeleteDevice(fido);
-		return STATUS_DELETE_PENDING;
-	}
+		IoDeleteDevice(fdo);
+	};
 
-	// Create C++ device object for kernel device object fido, passing the rest values as constructor parameters
-	filter_device_t::create_device_object(fido, pdo, fido, nextdo);
+	// Attach device to device stack
+	auto nextdo = IoAttachDeviceToDeviceStack(fdo, pdo);
+	if (!nextdo)
+		return STATUS_DELETE_PENDING;
+
+	// Detach device on error
+	SCOPE_EXIT_CANCELLABLE(c2)
+	{
+		IoDetachDevice(nextdo);
+	};
+
+	// Register device interface
+	drv::sys_unicode_string_t link;
+	if (auto status = IoRegisterDeviceInterface(pdo, &function::GUID_DEVINTERFACE_MY_FUNCTION, 
+		nullptr, &link); nt_error(status))
+		return status;
+	
+	// No error, cancel scope exit blocks
+	c2.cancel();
+	c1.cancel();
+
+	// Construct C++ object and pass parameters to constructor
+	function_device_t::create_device_object(fdo, pdo, fdo, nextdo, link);
 	return STATUS_SUCCESS;
 }
 ```

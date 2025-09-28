@@ -12,6 +12,7 @@
 #include <drv/decl_impl.h>
 #include <drv/allocator_impl.h>
 
+// Forward declare AddDevice routine
 DRIVER_ADD_DEVICE Driver_AddDevice;
 
 extern "C" NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, [[maybe_unused]] PUNICODE_STRING RegistryPath)
@@ -19,13 +20,7 @@ extern "C" NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, [[maybe_unused]] PU
 	// DriverEntry is called at PASSIVE_LEVEL
 	PAGED_CODE();
 
-	// Set dispatch routines
-	sr::fill(sr::subrange(DriverObject->MajorFunction, DriverObject->MajorFunction + IRP_MJ_MAXIMUM_FUNCTION + 1), [](PDEVICE_OBJECT DeviceObject, PIRP Irp) noexcept
-	{
-		return static_cast<drv::IDevice *>(DeviceObject->DeviceExtension)->drv_dispatch(Irp);
-	});
-
-	// Set AddDevice routine
+	drv::init_dispatch_routines(DriverObject);
 	DriverObject->DriverExtension->AddDevice = Driver_AddDevice;
 	return STATUS_SUCCESS;
 }

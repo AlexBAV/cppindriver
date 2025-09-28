@@ -35,6 +35,7 @@
 #include <drv/device.h>
 #include <drv/ustring.h>
 #include <drv/guid.h>
+#include <drv/onexit.h>
 
 // wil
 #include <wil/resource.h>

@@ -78,6 +78,9 @@ public:
 	}
 };
 
+/// <summary>
+/// Function device object C++ object
+/// </summary>
 class function_device_t : public drv::device_t<function_device_t>
 {
 	PDEVICE_OBJECT pdo, nextdo;
@@ -111,39 +114,55 @@ public:
 	NTSTATUS drv_dispatch_write(drv::irp_t &&irp) noexcept;
 };
 
+/// <summary>
+/// PNP Driver AddDevice
+/// </summary>
 NTSTATUS Driver_AddDevice(PDRIVER_OBJECT DriverObject, PDEVICE_OBJECT pdo)
 {
 	// AddDevice is called at PASSIVE_LEVEL
 	PAGED_CODE();
 
+	// Create kernel device object
 	PDEVICE_OBJECT fdo;
 	if (auto status = IoCreateDevice(DriverObject, sizeof(function_device_t), nullptr, FILE_DEVICE_UNKNOWN, FILE_DEVICE_SECURE_OPEN, false, &fdo); nt_error(status))
 		return status;
 
+	// Delete created device on error
 	SCOPE_EXIT_CANCELLABLE(c1)
 	{
 		IoDeleteDevice(fdo);
 	};
 
+	// Attach device to device stack
 	auto nextdo = IoAttachDeviceToDeviceStack(fdo, pdo);
 	if (!nextdo)
 		return STATUS_DELETE_PENDING;
 
+	// Detach device on error
 	SCOPE_EXIT_CANCELLABLE(c2)
 	{
 		IoDetachDevice(nextdo);
 	};
 
+	// Register device interface
 	drv::sys_unicode_string_t link;
 	if (auto status = IoRegisterDeviceInterface(pdo, &function::GUID_DEVINTERFACE_MY_FUNCTION, nullptr, &link); nt_error(status))
 		return status;
 	
+	// No error, cancel scope exit blocks
 	c2.cancel();
 	c1.cancel();
+
+	// Construct C++ object and pass parameters to constructor
 	function_device_t::create_device_object(fdo, pdo, fdo, nextdo, link);
 	return STATUS_SUCCESS;
 }
 
+/// <summary>
+/// PNP dispatch routine. Enables and disables device interface and destroys C++ object, detaches and deletes device object
+/// </summary>
+/// <param name="irp"></param>
+/// <returns></returns>
 NTSTATUS function_device_t::drv_dispatch_pnp(drv::irp_t &&irp) noexcept
 {
 	DISPATCH_PROLOG(irp);
@@ -166,6 +185,11 @@ NTSTATUS function_device_t::drv_dispatch_pnp(drv::irp_t &&irp) noexcept
 	return complete_irp_and_release_remove_lock(std::move(irp), STATUS_SUCCESS);
 }
 
+/// <summary>
+/// CREATE dispatch routine
+/// </summary>
+/// <param name="irp"></param>
+/// <returns></returns>
 NTSTATUS function_device_t::drv_dispatch_create(drv::irp_t &&irp) noexcept
 {
 	DISPATCH_PROLOG(irp);
@@ -173,6 +197,10 @@ NTSTATUS function_device_t::drv_dispatch_create(drv::irp_t &&irp) noexcept
 	return complete_irp_and_release_remove_lock(std::move(irp), STATUS_ACCESS_DENIED);
 }
 
+/// <summary>
+/// CLEANUP dispatch routine.
+/// Its main job is to cancel all pending requests from a given file object
+/// </summary>
 NTSTATUS function_device_t::drv_dispatch_cleanup(drv::irp_t &&irp) noexcept
 {
 	DISPATCH_PROLOG(irp);
@@ -189,6 +217,9 @@ NTSTATUS function_device_t::drv_dispatch_cleanup(drv::irp_t &&irp) noexcept
 	return complete_irp_and_release_remove_lock(std::move(irp), STATUS_SUCCESS);
 }
 
+/// <summary>
+/// CLOSE dispatch routine
+/// </summary>
 NTSTATUS function_device_t::drv_dispatch_close(drv::irp_t &&irp) noexcept
 {
 	DISPATCH_PROLOG(irp);
@@ -196,6 +227,9 @@ NTSTATUS function_device_t::drv_dispatch_close(drv::irp_t &&irp) noexcept
 	return complete_irp_and_release_remove_lock(std::move(irp), STATUS_SUCCESS);
 }
 
+/// <summary>
+/// READ dispatch routine
+/// </summary>
 NTSTATUS function_device_t::drv_dispatch_read(drv::irp_t &&irp) noexcept
 {
 	DISPATCH_PROLOG(irp);
@@ -217,29 +251,34 @@ NTSTATUS function_device_t::drv_dispatch_read(drv::irp_t &&irp) noexcept
 	}
 	else
 	{
+		// Buffer is empty, mark this IRP as pending and put it into the CSQ
 		l.reset();
 		irp.mark_pending();
 		in_queue.insert(std::move(irp));
 		result = STATUS_PENDING;
 	}
 
+	// Check if any pending writes can be processed
 	process_pending_writes();
 	release_remove_lock(tag);
 	return result;
 }
 
+/// <summary>
+/// WRITE dispatch routine
+/// </summary>
 NTSTATUS function_device_t::drv_dispatch_write(drv::irp_t &&irp) noexcept
 {
 	DISPATCH_PROLOG(irp);
 	const auto tag = irp.tag();
 
-	auto input_data = std::span{ static_cast<std::byte *>(irp->AssociatedIrp.SystemBuffer), irp.current_stack_location()->Parameters.Write.Length };
+	const auto input_data = std::span{ static_cast<std::byte *>(irp->AssociatedIrp.SystemBuffer), irp.current_stack_location()->Parameters.Write.Length };
 
-	// if we have enough free space in our buffer, copy the data and complete IRP synchronously
 	NTSTATUS result;
 	
 	if (auto l = buffer_lock.acquire(); buffer.free_space() >= input_data.size())
 	{
+		// There is enough free space in a buffer, copy and complete IRP synchronously
 		buffer.append(input_data);
 		result = std::move(irp).complete(STATUS_SUCCESS, input_data.size());
 	}
@@ -255,11 +294,15 @@ NTSTATUS function_device_t::drv_dispatch_write(drv::irp_t &&irp) noexcept
 		result = STATUS_PENDING;
 	}
 
+	// Check if any pending reads can be processed
 	process_pending_reads();
 	release_remove_lock(tag);
 	return result;
 }
 
+/// <summary>
+/// Process any pending reads
+/// </summary>
 void function_device_t::process_pending_reads() noexcept
 {
 	bool requests_processed{};
@@ -291,6 +334,9 @@ void function_device_t::process_pending_reads() noexcept
 		process_pending_writes();
 }
 
+/// <summary>
+/// Process any pending writes
+/// </summary>
 void function_device_t::process_pending_writes() noexcept
 {
 	bool buffer_grown{};

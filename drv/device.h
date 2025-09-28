@@ -13,6 +13,8 @@ namespace drv
 {
 	namespace details
 	{
+		namespace sr = std::ranges;
+		namespace rv = std::views;
 		/// <summary>
 		/// Device distpatch interface
 		/// </summary>
@@ -352,12 +354,22 @@ namespace drv
 				return status;
 			}
 		};
+
+		inline void init_dispatch_routines(PDRIVER_OBJECT DriverObject) noexcept
+		{
+			PAGED_CODE();
+			// Set dispatch routines
+			sr::fill(sr::subrange(DriverObject->MajorFunction, DriverObject->MajorFunction + IRP_MJ_MAXIMUM_FUNCTION + 1), [](PDEVICE_OBJECT DeviceObject, PIRP Irp) noexcept
+			{
+				return static_cast<IDevice *>(DeviceObject->DeviceExtension)->drv_dispatch(Irp);
+			});
+		}
 	}
 
-	using details::IDevice;
 	using details::device_t;
 	using details::basic_filter_device_t;
 	using details::irp_t;
+	using details::init_dispatch_routines;
 }
 
 /// <summary>
