@@ -64,6 +64,24 @@ Next limitation is again caused by the lack of Runtime library: you cannot have 
 
 Apart from that, we can use any Standard Library class or function that could be decoupled from runtime support (that is, either have header-only implementation, or their runtime implementation may be substituted).
 
+## Samples in this Repository
+
+This repository includes the following samples:
+
+* `wdm/filter`
+
+  A sample filter driver using WDM. It creates a device object and attaches it to the device stack. It then forwards all IRPs to the underlying device object and additionally handles minor PNP requests `IRP_MN_START_DEVICE`, `IRP_MN_STOP_DEVICE` and `IRP_MN_REMOVE_DEVICE` in a completion routine. It enables and disables a device interface in response to the first two and completely destroys the C++ device object as well as its filter device object in response to the last one.
+  
+  It additionally handles a custom Device I/O control code.
+
+* `wdm/function`
+
+  A sample function driver using WDM. It creates a function device object... TODO
+
+* `kmdf/function`
+
+  Will be added later
+  
 ## Implementation
 
 ### It all Starts with an Allocator
@@ -239,8 +257,6 @@ public:
 
 Device object class can override any dispatch routine[^dispatch] by declaring a public function with the name that follows this template: `drv_dispatch_XXX`, where `XXX` is a major function code, like `create`, `close`, `read`, `write` and so on. Overridden dispatch routine must either synchronously complete the passed IRP, or do it asynchronously, as any other WDM driver.
 
-Library has a wrapper for cancel-safe queue in `csq.h` header, which may be used if the driver needs to safely store passed IRP for later processing.
-
 ### Creating Device Objects
 
 Here's the implementation of `Driver_AddDevice` routine for a sample filter driver:
@@ -285,7 +301,7 @@ filter_device_t::create_device_object(fido, pdo, fido, nextdo);
 
 The lifetime of a C++ device class is bound to the lifetime of the kernel device object. The actual physical storage of a C++ object is within the device extension of the device object, therefore, we must be very careful when accessing it at the time device object is deleted.
 
-The library provides support for destroying C++ device object with a call to `device_t::delete_device(PIRP)` function. When this function returns, C++ device object cannot be used anymore.
+The library provides support for destroying C++ device object with a call to `device_t::delete_device(void *tag)` function. When this function returns, C++ device object cannot be used anymore.
 
 The time this function is called depends on the device object type. The sample filter driver illustrates how you can do it for a filter device object in a completion routine for a PNP request `IRP_MN_REMOVE_DEVICE`:
 
@@ -297,31 +313,72 @@ NTSTATUS filter_device_t::on_pnp_completion(PIRP irp) noexcept
 
 	switch (IoGetCurrentIrpStackLocation(irp)->MinorFunction)
 	{
-		...
-	case IRP_MN_REMOVE_DEVICE:
-		// Disable device interface
+	case IRP_MN_START_DEVICE:
+	{
+		on_device_started();
+		break;
+	}
+	case IRP_MN_STOP_DEVICE:
 		on_device_stopped();
-		// Destroy C++ device object and delete kernel device object
-		// This will also stop and wait on device remove lock
-		return delete_device(irp);
+		break;
+	case IRP_MN_REMOVE_DEVICE:
+		on_device_stopped();
+		delete_device(irp);
+		return STATUS_SUCCESS;
 	}
 
-	// release remove lock and complete
 	release_remove_lock(irp);
 	return STATUS_SUCCESS;
 }
 
-NTSTATUS filter_device_t::drv_dispatch_pnp(PIRP irp) noexcept
+NTSTATUS filter_device_t::drv_dispatch_pnp(drv::irp_t &&irp) noexcept
 {
-	// acquire device remove lock
 	DISPATCH_PROLOG(irp);
 
-	IoCopyCurrentIrpStackLocationToNext(irp);
-	IoSetCompletionRoutine(irp, [](PDEVICE_OBJECT DeviceObject, PIRP Irp, [[maybe_unused]] PVOID Context) noexcept
+	irp.copy_stack_location();
+	irp.set_completion_routine([](PDEVICE_OBJECT DeviceObject, PIRP Irp, [[maybe_unused]] PVOID Context) noexcept
 	{
 		return from_device_object(DeviceObject)->on_pnp_completion(Irp);
-	}, nullptr, true, true, true);
+	});
 
-	return IoCallDriver(NextDO, irp);
+	return std::move(irp).call_driver(NextDO);
 }
 ```
+
+### The `irp_t` Wrapper Class
+
+WDM driver must be very careful with managing the lifetime of IRP requests objects. Traditionally, the driver writer has to manually is basically left with manual lifetime management. TODO
+
+
+The library defines a wrapper class `irp_t` that puts a burden of IRP lifetime management to the compiler. When the device object's dispatch routine is invoked, an r-value reference to the `irp_t` object is passed to it. The object must be empty at the time it is destroyed, otherwise, an assertion failure is triggered in a debug build.
+
+Methods that complete the request or pass it down to another driver in a chain, require you to pass an r-value reference, explicitly signaling the end of the object visibility and accessibility in the current scope.
+
+```cpp
+NTSTATUS filter_device_t::drv_dispatch_device_control(drv::irp_t &&irp) noexcept
+{
+	...
+	// The following will not compile:
+	return irp.complete(STATUS_SUCCESS); // irp is not an r-value reference
+	// or
+	return irp.call_driver(NextDO);	// irp is not an r-value reference
+
+	// The following will compile:
+	return std::move(irp).complete(STATUS_SUCCESS);
+	// or
+	return std::move(irp).call_driver(NextDO);
+
+	// The following will assert in debug build and 
+	// trigger an error in any static analysis tool:
+	std::move(irp).complete(STATUS_SUCCESS);
+	if (nt_success(irp->IoStatus.Status)) { ... } // use of moved-from object
+	...
+}
+```
+
+Note that the wrapper class is not used in a completion routine. IRP is already completed at the time a completion routine is invoked, but is guaranteed to be accessible until it returns. There is no need to manage lifetime of the object during its execution and a completion routine should never attempt to complete it again or pass it to any other drivers.
+
+If the driver wants to postpone the completion of an IRP it received, but cannot call any other driver to do it, it must store it for later processing. Correctly storing IRPs is hard, because they can be cancelled at any time and the driver must be ready to handle those cancellation requests.
+
+Traditionally, the safest way to store an IRP is to use the Cancel-Safe Queue. The library provides a wrapper class `cancel_safe_queue`, defined in `csq.h` header, that simplifies the usage of Cancel-Safe queues. The sample `function` driver illustrates how this class can be used to safely store IRPs.
+

@@ -13,10 +13,15 @@
 
 class filter_device_t : public drv::basic_filter_device_t<filter_device_t>
 {
+	// Illustrate the usage of convenient UNICODE_STRING wrapper
 	drv::unicode_string_t devinterface;
+	// Illustrate the usage of std::atomic
 	std::atomic<int> counter{};
 
-	//
+	/// <summary>
+	/// This function is called when device is started.
+	/// It registers device interface and activates it
+	/// </summary>
 	void on_device_started() noexcept
 	{
 		drv::sys_unicode_string_t link;
@@ -27,6 +32,10 @@ class filter_device_t : public drv::basic_filter_device_t<filter_device_t>
 		}
 	}
 
+	/// <summary>
+	/// This function is called when device is stopped or removed
+	/// It disables the device interface
+	/// </summary>
 	void on_device_stopped() noexcept
 	{
 		std::ignore = IoSetDeviceInterfaceState(&devinterface, false);
@@ -45,10 +54,17 @@ public:
 		ThisDO->Flags &= ~DO_DEVICE_INITIALIZING;
 	}
 
-	NTSTATUS drv_dispatch_device_control(PIRP irp) noexcept;
-	NTSTATUS drv_dispatch_pnp(PIRP irp) noexcept;
+	[[nodiscard]]
+	NTSTATUS drv_dispatch_device_control(drv::irp_t &&irp) noexcept;
+
+	[[nodiscard]]
+	NTSTATUS drv_dispatch_pnp(drv::irp_t &&irp) noexcept;
 };
 
+/// <summary>
+/// Implementation of drivers' AddDevice routine
+/// It creates a filter device object (FiDO), attaches it to device stack and creates an instance of filter_device_t class
+/// </summary>
 NTSTATUS Driver_AddDevice(PDRIVER_OBJECT DriverObject, PDEVICE_OBJECT pdo)
 {
 	PDEVICE_OBJECT fido;
@@ -66,6 +82,9 @@ NTSTATUS Driver_AddDevice(PDRIVER_OBJECT DriverObject, PDEVICE_OBJECT pdo)
 	return STATUS_SUCCESS;
 }
 
+/// <summary>
+/// PNP I/O completion routine
+/// </summary>
 NTSTATUS filter_device_t::on_pnp_completion(PIRP irp) noexcept
 {
 	if (irp->PendingReturned)
@@ -83,16 +102,24 @@ NTSTATUS filter_device_t::on_pnp_completion(PIRP irp) noexcept
 		break;
 	case IRP_MN_REMOVE_DEVICE:
 		on_device_stopped();
-		return delete_device(irp);
+		delete_device(irp);
+		return STATUS_SUCCESS;
 	}
 
 	release_remove_lock(irp);
 	return STATUS_SUCCESS;
 }
 
-NTSTATUS filter_device_t::drv_dispatch_device_control(PIRP irp) noexcept
+/// <summary>
+/// Device Control I/O dispatch routine
+/// It handles a custom IOCTL_GET_VERSION I/O control request and returns a structure
+/// It also illustrates the usage of device remove lock
+/// 
+/// Other device I/O controls are forwarded down the device stack
+/// </summary>
+NTSTATUS filter_device_t::drv_dispatch_device_control(drv::irp_t &&irp) noexcept
 {
-	switch (auto &dic = IoGetCurrentIrpStackLocation(irp)->Parameters.DeviceIoControl; dic.IoControlCode)
+	switch (auto &dic = irp.current_stack_location()->Parameters.DeviceIoControl; dic.IoControlCode)
 	{
 	case filter::IOCTL_GET_VERSION:
 		DISPATCH_PROLOG(irp);
@@ -102,24 +129,28 @@ NTSTATUS filter_device_t::drv_dispatch_device_control(PIRP irp) noexcept
 			pv->current_version = filter::CurrentVersion;
 			pv->requested_count = counter.fetch_add(1, std::memory_order_relaxed);
 
-			return complete_request_and_release_remove_lock(irp, STATUS_SUCCESS, sizeof(*pv));
+			return complete_irp_and_release_remove_lock(std::move(irp), STATUS_SUCCESS, sizeof(*pv));
 		}
 		else
-			return complete_request_and_release_remove_lock(irp, STATUS_INSUFFICIENT_RESOURCES);
+			return complete_irp_and_release_remove_lock(std::move(irp), STATUS_INSUFFICIENT_RESOURCES);
 	}
 
-	return filter_base::drv_dispatch_default(irp);
+	return filter_base::drv_dispatch_default(std::move(irp));
 }
 
-NTSTATUS filter_device_t::drv_dispatch_pnp(PIRP irp) noexcept
+/// <summary>
+/// PNP dispatch routine
+/// It installs a completion routine and forwards the request down the device stack
+/// </summary>
+NTSTATUS filter_device_t::drv_dispatch_pnp(drv::irp_t &&irp) noexcept
 {
 	DISPATCH_PROLOG(irp);
 
-	IoCopyCurrentIrpStackLocationToNext(irp);
-	IoSetCompletionRoutine(irp, [](PDEVICE_OBJECT DeviceObject, PIRP Irp, [[maybe_unused]] PVOID Context) noexcept
+	irp.copy_stack_location();
+	irp.set_completion_routine([](PDEVICE_OBJECT DeviceObject, PIRP Irp, [[maybe_unused]] PVOID Context) noexcept
 	{
 		return from_device_object(DeviceObject)->on_pnp_completion(Irp);
-	}, nullptr, true, true, true);
+	});
 
-	return IoCallDriver(NextDO, irp);
+	return std::move(irp).call_driver(NextDO);
 }
