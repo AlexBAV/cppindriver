@@ -178,6 +178,15 @@ namespace drv
 			}
 
 			/// <summary>
+			/// Mark IRP pending
+			/// </summary>
+			void mark_pending() noexcept
+			{
+				assert_non_empty();
+				IoMarkIrpPending(irp);
+			}
+
+			/// <summary>
 			/// Copy current stack location
 			/// </summary>
 			void copy_stack_location() noexcept

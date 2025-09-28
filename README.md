@@ -72,11 +72,13 @@ This repository includes the following samples:
 
   A sample filter driver using WDM. It creates a device object and attaches it to the device stack. It then forwards all IRPs to the underlying device object and additionally handles minor PNP requests `IRP_MN_START_DEVICE`, `IRP_MN_STOP_DEVICE` and `IRP_MN_REMOVE_DEVICE` in a completion routine. It enables and disables a device interface in response to the first two and completely destroys the C++ device object as well as its filter device object in response to the last one.
   
-  It additionally handles a custom Device I/O control code.
+  It additionally illustrates how we can define a custom I/O control code and handle it synchronously in a Device I/O control dispatch routine.
 
 * `wdm/function`
 
-  A sample function driver using WDM. It creates a function device object... TODO
+  A sample function driver using WDM. It creates a function device object for a loopback device. It registers a device interface and allows itself to be opened by any number of user-mode or kernel-mode callers. It maintains an internal 1MB buffer and stores all data sent to it (using the `WriteFile` function). This data may then be read back with a call to `ReadFile`, either using the same or any other opened handle. A read request is processed synchronously if there are any data in a buffer and asynchronously if the buffer is empty. Correspondingly, a write request is processed synchronously if there is enough room in an internal buffer. Otherwise, the write requests becomes pending until some other caller reads data from the buffer, either using the same handle, or any other handle.
+
+  It illustrates synchronous and asynchronous I/O processing, the use of `cancel_safe_queue` wrapper for kernel Cancel Safe Queues, cancellation of pending I/O requests on handle close among other things.
 
 * `kmdf/function`
 
@@ -236,6 +238,29 @@ Each device object class the driver defines must derive from the `IDevice` inter
 
 A function device object class must derive from `device_t<Derived>` template class.
 
+```cpp
+class function_device_t : public drv::device_t<function_device_t>
+{
+	...
+		function_device_t(PDEVICE_OBJECT pdo, PDEVICE_OBJECT fdo, PDEVICE_OBJECT nextdo, std::wstring_view devinterface) noexcept :
+		drv::device_t<function_device_t>{ fdo },
+		pdo{ pdo },
+		nextdo{ nextdo },
+		devinterface{ devinterface }
+	{
+		...
+	}
+	...
+	// Dispatch routines for major I/O codes we handle
+	NTSTATUS drv_dispatch_pnp(drv::irp_t &&irp) noexcept;
+	NTSTATUS drv_dispatch_create(drv::irp_t &&irp) noexcept;
+	NTSTATUS drv_dispatch_cleanup(drv::irp_t &&irp) noexcept;
+	NTSTATUS drv_dispatch_close(drv::irp_t &&irp) noexcept;
+	NTSTATUS drv_dispatch_read(drv::irp_t &&irp) noexcept;
+	NTSTATUS drv_dispatch_write(drv::irp_t &&irp) noexcept;
+};
+```
+
 #### Filter Device Objects
 
 A filter device object class must derive from `basic_filter_device_t<Derived>` template class. Example from the filter sample driver:
@@ -331,12 +356,11 @@ NTSTATUS filter_device_t::drv_dispatch_pnp(drv::irp_t &&irp) noexcept
 
 ### The `irp_t` Wrapper Class
 
-WDM driver must be very careful with managing the lifetime of IRP requests objects. Traditionally, the driver writer has to manually is basically left with manual lifetime management. TODO
+WDM driver must be very careful with managing the lifetime of IRP requests objects. Correctly handling the lifetime of IRP is hard and error-prone.
 
+The library has a wrapper class `irp_t` (defined in `irp.h` header) that puts a large part of IRP lifetime management to the compiler. When the device object's dispatch routine is invoked, an r-value reference to the `irp_t` object is passed to it. The object must be empty at the time it is destroyed, otherwise, an assertion failure is triggered in a debug build.
 
-The library defines a wrapper class `irp_t` that puts a burden of IRP lifetime management to the compiler. When the device object's dispatch routine is invoked, an r-value reference to the `irp_t` object is passed to it. The object must be empty at the time it is destroyed, otherwise, an assertion failure is triggered in a debug build.
-
-Methods that complete the request or pass it down to another driver in a chain, require you to pass an r-value reference, explicitly signaling the end of the object visibility and accessibility in the current scope.
+Methods that complete the request or pass it down to another driver in a chain require you to pass an r-value reference, explicitly signaling the end of the object visibility and accessibility in the current scope.
 
 ```cpp
 NTSTATUS filter_device_t::drv_dispatch_device_control(drv::irp_t &&irp) noexcept
@@ -366,3 +390,38 @@ If the driver wants to postpone the completion of an IRP it received, but cannot
 
 Traditionally, the safest way to store an IRP is to use the Cancel-Safe Queue. The library provides a wrapper class `cancel_safe_queue`, defined in `csq.h` header, that simplifies the usage of Cancel-Safe queues. The sample `function` driver illustrates how this class can be used to safely store IRPs.
 
+```cpp
+NTSTATUS function_device_t::drv_dispatch_read(drv::irp_t &&irp) noexcept
+{
+	DISPATCH_PROLOG(irp);
+	const auto tag = irp.tag();
+
+	const auto read_data = std::span{ static_cast<std::byte *>(irp->AssociatedIrp.SystemBuffer), 
+		irp.current_stack_location()->Parameters.Read.Length };
+
+	NTSTATUS result;
+	if (auto l = buffer_lock.acquire(); !buffer.empty())
+	{
+		// Buffer is not empty, we can complete read request synchronously
+		const auto bytes_to_copy = std::min(read_data.size(), buffer.size());
+		sr::copy(std::span{ buffer }.subspan(0, bytes_to_copy), read_data.begin());
+		buffer.erase(bytes_to_copy);
+		// Release spin lock before completing IRP
+		l.reset();
+		result = std::move(irp).complete(STATUS_SUCCESS, bytes_to_copy);
+	}
+	else
+	{
+		// Release spinlock before inserting IRP into CSQ
+		l.reset();
+		// Mark IRP pending and insert it into CSQ
+		irp.mark_pending();
+		in_queue.insert(std::move(irp));
+		result = STATUS_PENDING;
+	}
+
+	process_pending_writes();
+	release_remove_lock(tag);
+	return result;
+}
+```

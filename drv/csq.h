@@ -52,7 +52,7 @@ namespace drv
 			{
 				auto next = (irp == nullptr) ? list.get_head() : list.get_next(irp);
 
-				while (next && !context && IoGetCurrentIrpStackLocation(next)->FileObject != context)
+				while (next && context && IoGetCurrentIrpStackLocation(next)->FileObject != context)
 					next = list.get_next(next);
 
 				return next;

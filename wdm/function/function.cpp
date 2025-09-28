@@ -201,9 +201,8 @@ NTSTATUS function_device_t::drv_dispatch_read(drv::irp_t &&irp) noexcept
 	DISPATCH_PROLOG(irp);
 	const auto tag = irp.tag();
 
-	auto read_data = std::span{ static_cast<std::byte *>(irp->AssociatedIrp.SystemBuffer), irp.current_stack_location()->Parameters.Read.Length };
+	const auto read_data = std::span{ static_cast<std::byte *>(irp->AssociatedIrp.SystemBuffer), irp.current_stack_location()->Parameters.Read.Length };
 
-	// if we have enough free space in our buffer, copy the data and complete IRP synchronously
 	NTSTATUS result;
 
 	if (auto l = buffer_lock.acquire(); !buffer.empty())
@@ -219,6 +218,7 @@ NTSTATUS function_device_t::drv_dispatch_read(drv::irp_t &&irp) noexcept
 	else
 	{
 		l.reset();
+		irp.mark_pending();
 		in_queue.insert(std::move(irp));
 		result = STATUS_PENDING;
 	}
@@ -250,6 +250,7 @@ NTSTATUS function_device_t::drv_dispatch_write(drv::irp_t &&irp) noexcept
 		buffer.append(input_data.subspan(0, free_space));
 		// store the number of bytes we already copied
 		irp->Tail.Overlay.DriverContext[0] = reinterpret_cast<PVOID>(free_space);
+		irp.mark_pending();
 		out_queue.insert(std::move(irp));
 		result = STATUS_PENDING;
 	}
