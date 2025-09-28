@@ -62,8 +62,7 @@ namespace drv
 
 				return this->Buffer;
 			}
-		protected:
-
+		public:
 			pool_allocation_strategy() noexcept :
 				Base{}
 			{

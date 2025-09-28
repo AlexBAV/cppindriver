@@ -36,6 +36,7 @@
 
 // If you are using boost, the following may also be required
 #define BOOST_DISABLE_ASSERTS
+#define BOOST_NO_EXCEPTIONS
 
 // Define architecture type as required by WDM
 #if defined(_M_AMD64)

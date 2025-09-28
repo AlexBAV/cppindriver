@@ -13,11 +13,15 @@
     <File Path="drv/device.h" />
     <File Path="drv/guid.h" />
     <File Path="drv/intdefs.h" />
+    <File Path="drv/irp.h" />
+    <File Path="drv/list.h" />
     <File Path="drv/ntstatus.h" />
+    <File Path="drv/onexit.h" />
     <File Path="drv/ustring.h" />
   </Folder>
   <Folder Name="/Solution Items/">
     <File Path=".editorconfig" />
   </Folder>
   <Project Path="wdm/filter/filter.vcxproj" Id="4b38870e-20a4-4da6-9708-4b6dadff6378" />
+  <Project Path="wdm/function/function.vcxproj" Id="c55ee960-15bb-4caf-900a-0dd2f0ae16a3" />
 </Solution>

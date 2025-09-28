@@ -283,20 +283,6 @@ NTSTATUS Driver_AddDevice(PDRIVER_OBJECT DriverObject, PDEVICE_OBJECT pdo)
 }
 ```
 
-In order to create a C++ device object and associate it with a kernel device object, you need to pass a size of the device oject class in a call to `IoCreateDevice`:
-
-```cpp
-PDEVICE_OBJECT fido;
-if (auto status = IoCreateDevice(DriverObject, sizeof(filter_device_t), nullptr, FILE_DEVICE_UNKNOWN, FILE_DEVICE_SECURE_OPEN, false, &fido); nt_error(status))
-	return status;
-```
-
-And create a C++ device object, associated with created kernel device object (the following will call a constructor, passing it any values you specify):
-
-```cpp
-filter_device_t::create_device_object(fido, pdo, fido, nextdo);
-```
-
 ### Destroying Device Objects
 
 The lifetime of a C++ device class is bound to the lifetime of the kernel device object. The actual physical storage of a C++ object is within the device extension of the device object, therefore, we must be very careful when accessing it at the time device object is deleted.
@@ -314,10 +300,8 @@ NTSTATUS filter_device_t::on_pnp_completion(PIRP irp) noexcept
 	switch (IoGetCurrentIrpStackLocation(irp)->MinorFunction)
 	{
 	case IRP_MN_START_DEVICE:
-	{
 		on_device_started();
 		break;
-	}
 	case IRP_MN_STOP_DEVICE:
 		on_device_stopped();
 		break;

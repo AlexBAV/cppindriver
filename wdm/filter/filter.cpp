@@ -67,6 +67,9 @@ public:
 /// </summary>
 NTSTATUS Driver_AddDevice(PDRIVER_OBJECT DriverObject, PDEVICE_OBJECT pdo)
 {
+	// AddDevice is called at PASSIVE_LEVEL
+	PAGED_CODE();
+
 	PDEVICE_OBJECT fido;
 	if (auto status = IoCreateDevice(DriverObject, sizeof(filter_device_t), nullptr, FILE_DEVICE_UNKNOWN, FILE_DEVICE_SECURE_OPEN, false, &fido); nt_error(status))
 		return status;
