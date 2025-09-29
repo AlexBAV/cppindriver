@@ -475,32 +475,32 @@ A simple example is a helper function `resume_background` that can be used to re
 ```cpp
 #include <coroutine>
 
-struct resume_background_t
+inline auto resume_background(PDEVICE_OBJECT pdo) noexcept
 {
-	PDEVICE_OBJECT pdo{};
-
-	constexpr bool await_ready() const noexcept
+	struct awaitable
 	{
-		return false;
-	}
+		PDEVICE_OBJECT pdo{};
 
-	constexpr void await_resume() const noexcept
-	{
-	}
-
-	void await_suspend(std::coroutine_handle<> handle) const noexcept
-	{
-		IoQueueWorkItemEx(IoAllocateWorkItem(pdo), []([[maybe_unused]] PVOID IoObject, PVOID Context, PIO_WORKITEM IoWorkItem) noexcept
+		constexpr bool await_ready() const noexcept
 		{
-			std::coroutine_handle<>::from_address(Context)();
-			IoFreeWorkItem(IoWorkItem);
-		}, DelayedWorkQueue, handle.address());
-	}
-};
+			return false;
+		}
 
-inline resume_background_t resume_background(PDEVICE_OBJECT pdo) noexcept
-{
-	return { pdo };
+		constexpr void await_resume() const noexcept
+		{
+		}
+
+		void await_suspend(std::coroutine_handle<> handle) const noexcept
+		{
+			IoQueueWorkItemEx(IoAllocateWorkItem(pdo), []([[maybe_unused]] PVOID IoObject, PVOID Context, PIO_WORKITEM IoWorkItem) noexcept
+			{
+				std::coroutine_handle<>::from_address(Context)();
+				IoFreeWorkItem(IoWorkItem);
+			}, DelayedWorkQueue, handle.address());
+		}
+	};
+
+	return awaitable{ pdo };
 }
 ...
 drv::coro::fire_and_forget my_device::foo()
