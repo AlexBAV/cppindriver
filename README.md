@@ -84,11 +84,16 @@ This repository includes the following samples:
 
   Will be added later
 
-## C++? Template Code Bloat!
+## C++! What About Template Code Bloat?
 
-One of the often heard argument against using C++ in device drivers is that it leads to a code bloat. However, modern compilers are extremely good at optimizing C++ code and we do not link a runtime library, which is usually to blame for "code bloat".
+One of the often heard argument against using C++ in device drivers is that it leads to a code bloat. However, modern compilers are extremely good at optimizing C++ code and we do not use a runtime library, which is usually the one responsible for a the rest of "code bloat".
 
-For example, the sample projects compiled for x64 Release target result in 6.5 KB binary for a sample filter driver and 9.5 KB binary for a sample function driver.
+The sample drivers included in this repository, when compiled for x64 Release target (with optimizations for speed):
+
+* `wdm/filter` - 6.5 KB
+* `wdm/function` - 9.5 KB
+
+Of course they are very simple, but nevertheless have almost all required boilerplate and only business logic needs to be added above that. Sample function driver even has some business logic (it implements a simple loopback device with asynchronous I/O processing).
 
 ## Implementation
 
@@ -453,4 +458,162 @@ NTSTATUS function_device_t::drv_dispatch_read(drv::irp_t &&irp) noexcept
 	release_remove_lock(tag);
 	return result;
 }
+```
+
+## Coroutines? In a Driver?
+
+After successfully using C++ and a large portion of STL in kernel-mode driver, I was wondering, if it was possible to use coroutines as well?
+
+Personally, I'm a big fan of C++ coroutines and use them extensively in desktop software development. From years of usage, some patterns have became customary and I really missed them in kernel-mode development. 
+
+I was very skeptical when I started experimenting with coroutines in kernel mode, but, to my surprise, their adoption turned to be extremely simple! The only thing required for coroutines is… an allocator, and we already have one!
+
+That's it! You can immediately start creating and returning awaitable objects:
+
+A simple example is a helper function `resume_background` that can be used to resume the execution of a currently running coroutine in the context of a system worker thread at `PASSIVE_LEVEL` IRQL:
+
+```cpp
+#include <coroutine>
+
+struct resume_background_t
+{
+	PDEVICE_OBJECT pdo{};
+
+	constexpr bool await_ready() const noexcept
+	{
+		return false;
+	}
+
+	constexpr void await_resume() const noexcept
+	{
+	}
+
+	void await_suspend(std::coroutine_handle<> handle) const noexcept
+	{
+		IoQueueWorkItemEx(IoAllocateWorkItem(pdo), []([[maybe_unused]] PVOID IoObject, PVOID Context, PIO_WORKITEM IoWorkItem) noexcept
+		{
+			std::coroutine_handle<>::from_address(Context)();
+			IoFreeWorkItem(IoWorkItem);
+		}, DelayedWorkQueue, handle.address());
+	}
+};
+
+inline resume_background_t resume_background(PDEVICE_OBJECT pdo) noexcept
+{
+	return { pdo };
+}
+...
+drv::coro::fire_and_forget my_device::foo()
+{
+	// imaging this coroutine is called at DISPATCH_LEVEL and must complete
+	// at PASSIVE_LEVEL
+
+	co_await resume_background(pdo());
+	// continue at PASSIVE_LEVEL
+	...
+}
+```
+
+A slightly more complex example: a coroutine that constructs an URB and asynchronously sends it to a target device object:
+
+```cpp
+auto send_urb_async(PDEVICE_OBJECT pdo, USBD_HANDLE usbd, PURB urb, kcoro::cancellation_token &token) noexcept
+{
+	// Define the awaitable type
+    struct awaitable
+    {
+        PDEVICE_OBJECT pdo;
+        USBD_HANDLE usbd;
+        PURB urb;
+        kcoro::cancellation_token &token;
+
+        std::coroutine_handle<> resume;
+
+        IO_STATUS_BLOCK iostatus{};
+        kcoro::cancellation_subscription_token subscription_token;
+        std::atomic<PIRP> irp{};
+
+        static constexpr bool await_ready() noexcept
+        {
+            return false;
+        }
+
+        bool await_suspend(std::coroutine_handle<> resume_) noexcept
+        {
+            resume = resume_;
+
+            irp = IoAllocateIrp(pdo->StackSize, false);
+            if (!irp)
+            {
+                iostatus.Status = STATUS_INSUFFICIENT_RESOURCES;
+                return false;
+            }
+
+            subscription_token = token.subscribe([this](auto unlock) noexcept
+            {
+                auto i = irp.exchange({}, std::memory_order_relaxed);
+                unlock();
+                if (i)
+                    IoCancelIrp(i);
+            });
+
+            auto stack = IoGetNextIrpStackLocation(irp);
+
+            stack->MajorFunction = IRP_MJ_INTERNAL_DEVICE_CONTROL;
+            stack->Parameters.DeviceIoControl.IoControlCode = IOCTL_INTERNAL_USB_SUBMIT_URB;
+            USBD_AssignUrbToIoStackLocation(usbd, stack, urb);
+
+            IoSetCompletionRoutine(irp, []([[maybe_unused]] PDEVICE_OBJECT DeviceObject, PIRP Irp, PVOID Context) -> NTSTATUS
+            {
+                auto pc = static_cast<awaitable *>(Context);
+                pc->irp.store({}, std::memory_order_relaxed);
+                pc->subscription_token.destroy();
+
+                pc->iostatus = Irp->IoStatus;
+                IoFreeIrp(Irp);
+                pc->resume();
+                return STATUS_MORE_PROCESSING_REQUIRED;
+            }, this, true, true, true);
+
+            IoCallDriver(pdo, irp);
+            return true;
+        }
+
+        NTSTATUS await_resume() const noexcept
+        {
+            return iostatus.Status;
+        }
+    };
+
+    return awaitable{ pdo, usbd, urb, token };
+}
+```
+
+What about promise objects? The most simple one is `fire_and_forget`, which can be used whenever the caller is not interested in a result of coroutine operation:
+
+```cpp
+struct fire_and_forget
+{
+	struct promise_type
+	{
+		constexpr std::suspend_never initial_suspend() const noexcept
+		{
+			return{};
+		}
+
+		constexpr std::suspend_never final_suspend() const noexcept
+		{
+			return{};
+		}
+
+		auto get_return_object() noexcept
+		{
+			return fire_and_forget{};
+		}
+
+		void return_void() noexcept
+		{
+		}
+	};
+};
 ```
