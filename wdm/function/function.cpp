@@ -95,16 +95,17 @@ class function_device_t : public drv::device_t<function_device_t>
 	void process_pending_writes() noexcept;
 
 public:
-	function_device_t(PDEVICE_OBJECT pdo, PDEVICE_OBJECT fdo, PDEVICE_OBJECT nextdo, std::wstring_view devinterface) noexcept :
+	function_device_t(PDEVICE_OBJECT pdo, PDEVICE_OBJECT fdo, PDEVICE_OBJECT nextdo) noexcept :
 		drv::device_t<function_device_t>{ fdo },
 		pdo{ pdo },
-		nextdo{ nextdo },
-		devinterface{ devinterface }
+		nextdo{ nextdo }
 	{
 		// Our sample device provides buffered I/O for simplicity
-		ThisDO->Flags |= DO_BUFFERED_IO | DO_POWER_PAGABLE;
-		ThisDO->Flags &= ~DO_DEVICE_INITIALIZING;
+		fdo->Flags |= DO_BUFFERED_IO | DO_POWER_PAGABLE;
+		fdo->Flags &= ~DO_DEVICE_INITIALIZING;
 	}
+
+	NTSTATUS drv_final_construct() noexcept;
 
 	NTSTATUS drv_dispatch_pnp(drv::irp_t &&irp) noexcept;
 	NTSTATUS drv_dispatch_create(drv::irp_t &&irp) noexcept;
@@ -122,40 +123,18 @@ NTSTATUS Driver_AddDevice(PDRIVER_OBJECT DriverObject, PDEVICE_OBJECT pdo)
 	// AddDevice is called at PASSIVE_LEVEL
 	PAGED_CODE();
 
-	// Create kernel device object
-	PDEVICE_OBJECT fdo;
-	if (auto status = IoCreateDevice(DriverObject, sizeof(function_device_t), nullptr, FILE_DEVICE_UNKNOWN, FILE_DEVICE_SECURE_OPEN, false, &fdo); nt_error(status))
-		return status;
+	// Create device object, attach it to device stack and create C++ device object
+	return function_device_t::create_and_attach_device_object(DriverObject, pdo);
+}
 
-	// Delete created device on error
-	SCOPE_EXIT_CANCELLABLE(c1)
-	{
-		IoDeleteDevice(fdo);
-	};
-
-	// Attach device to device stack
-	auto nextdo = IoAttachDeviceToDeviceStack(fdo, pdo);
-	if (!nextdo)
-		return STATUS_DELETE_PENDING;
-
-	// Detach device on error
-	SCOPE_EXIT_CANCELLABLE(c2)
-	{
-		IoDetachDevice(nextdo);
-	};
-
-	// Register device interface
+NTSTATUS function_device_t::drv_final_construct() noexcept
+{
 	drv::sys_unicode_string_t link;
-	if (auto status = IoRegisterDeviceInterface(pdo, &function::GUID_DEVINTERFACE_MY_FUNCTION, nullptr, &link); nt_error(status))
-		return status;
-	
-	// No error, cancel scope exit blocks
-	c2.cancel();
-	c1.cancel();
-
-	// Construct C++ object and pass parameters to constructor
-	function_device_t::create_device_object(fdo, pdo, fdo, nextdo, link);
-	return STATUS_SUCCESS;
+	auto status = IoRegisterDeviceInterface(pdo, &function::GUID_DEVINTERFACE_MY_FUNCTION, nullptr, &link); 
+	if (nt_success(status))
+		devinterface = link;
+		
+	return status;
 }
 
 /// <summary>

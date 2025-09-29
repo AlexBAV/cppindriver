@@ -8,6 +8,7 @@
 
 #pragma once
 #include "irp.h"
+#include "onexit.h"
 
 namespace drv
 {
@@ -26,6 +27,12 @@ namespace drv
 
 		template<class T>
 		class device_t;
+
+		template<class T>
+		concept has_final_construct = requires(T & derived)
+		{
+			{ derived.drv_final_construct() } -> std::same_as<NTSTATUS>;
+		};
 
 #define LIST_OF_REQUESTS \
 	X(create) \
@@ -56,11 +63,11 @@ namespace drv
 		template<class Derived>
 		class device_t : public IDevice
 		{
+			PDEVICE_OBJECT ThisDO{};
 		protected:
 			using device_base = device_t;
 
 			IO_REMOVE_LOCK RemoveLock;
-			PDEVICE_OBJECT ThisDO{};
 			std::atomic<bool> delete_pending{};
 
 			device_t(PDEVICE_OBJECT thisdo) noexcept :
@@ -208,6 +215,12 @@ namespace drv
 
 		public:
 			[[nodiscard]]
+			auto this_do() const noexcept
+			{
+				return this->ThisDO;
+			}
+
+			[[nodiscard]]
 			bool is_deleted() const noexcept
 			{
 				return delete_pending.load(std::memory_order_relaxed);
@@ -245,7 +258,7 @@ namespace drv
 			/// <returns></returns>
 			static Derived *from_device_object(PDEVICE_OBJECT obj) noexcept
 			{
-				return static_cast<Derived *>(static_cast<IDevice *>(obj->DeviceExtension));
+				return static_cast<Derived *>(obj->DeviceExtension);
 			}
 
 			/// <summary>
@@ -258,6 +271,50 @@ namespace drv
 			static Derived *create_device_object(PDEVICE_OBJECT pdo, Args &&...args) noexcept
 			{
 				return std::construct_at(from_device_object(pdo), std::forward<Args>(args)...);
+			}
+
+			template<class...Args>
+			static NTSTATUS create_and_attach_device_object(PDRIVER_OBJECT DriverObject, PDEVICE_OBJECT pdo, Args &&...args) noexcept
+			{
+				PAGED_CODE();
+
+				PDEVICE_OBJECT fido;
+				if (auto status = IoCreateDevice(DriverObject, sizeof(Derived), nullptr, FILE_DEVICE_UNKNOWN, FILE_DEVICE_SECURE_OPEN, false, &fido); nt_error(status))
+					return status;
+
+				SCOPE_EXIT_CANCELLABLE(c1)
+				{
+					IoDeleteDevice(fido);
+				};
+
+				auto nextdo = IoAttachDeviceToDeviceStack(fido, pdo);
+				if (!nextdo)
+					return STATUS_DELETE_PENDING;
+
+				SCOPE_EXIT_CANCELLABLE(c2)
+				{
+					IoDetachDevice(nextdo);
+				};
+				
+				[[maybe_unused]] auto *p = create_device_object(fido, pdo, fido, nextdo, std::forward<Args>(args)...);
+				
+				if constexpr (has_final_construct<Derived>)
+				{
+					SCOPE_EXIT_CANCELLABLE(c3)
+					{
+						std::destroy_at(p);
+					};
+
+					if (auto status = p->drv_final_construct(); nt_error(status))
+						return status;
+
+					c3.cancel();
+				}
+
+				c2.cancel();
+				c1.cancel();
+
+				return STATUS_SUCCESS;
 			}
 		};
 
@@ -289,10 +346,9 @@ namespace drv
 		template<class Derived>
 		class basic_filter_device_t : public device_t<Derived>
 		{
+			PDEVICE_OBJECT PDO{}, NextDO{};
 		protected:
 			using filter_base = basic_filter_device_t;
-
-			PDEVICE_OBJECT PDO{}, NextDO{};
 
 			basic_filter_device_t(PDEVICE_OBJECT pdo, PDEVICE_OBJECT fido, PDEVICE_OBJECT nextdo) noexcept :
 				device_t<Derived>{ fido },
@@ -310,12 +366,24 @@ namespace drv
 			{
 				IoReleaseRemoveLockAndWait(&this->RemoveLock, tag);
 				IoDetachDevice(NextDO);
-				auto obj = this->ThisDO;
+				auto obj = this->this_do();
 				std::destroy_at(static_cast<Derived *>(this));
 				IoDeleteDevice(obj);
 			}
 
 		public:
+			[[nodiscard]]
+			auto pdo() const noexcept
+			{
+				return this->PDO;
+			}
+
+			[[nodiscard]]
+			auto next_do() const noexcept
+			{
+				return this->NextDO;
+			}
+
 			/// <summary>
 			/// Default Power dispatch routine for filter drivers
 			/// </summary>
@@ -331,7 +399,8 @@ namespace drv
 				}
 
 				irp.start_next_power_irp();
-				status = std::move(irp).power_call_driver(NextDO);
+				irp.skip_stack_location();
+				status = std::move(irp).power_call_driver(this->NextDO);
 				this->release_remove_lock(tag);
 				return status;
 			}
@@ -349,7 +418,7 @@ namespace drv
 					return std::move(irp).complete(status);
 
 				irp.skip_stack_location();
-				status = std::move(irp).call_driver(NextDO);
+				status = std::move(irp).call_driver(this->NextDO);
 				this->release_remove_lock(tag);
 				return status;
 			}

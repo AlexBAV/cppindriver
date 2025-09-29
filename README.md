@@ -307,44 +307,35 @@ NTSTATUS Driver_AddDevice(PDRIVER_OBJECT DriverObject, PDEVICE_OBJECT pdo)
 	// AddDevice is called at PASSIVE_LEVEL
 	PAGED_CODE();
 
-	// Create kernel device object
-	PDEVICE_OBJECT fdo;
-	if (auto status = IoCreateDevice(DriverObject, sizeof(function_device_t), nullptr, 
-		FILE_DEVICE_UNKNOWN, FILE_DEVICE_SECURE_OPEN, false, &fdo); nt_error(status))
-		return status;
-
-	// Delete created device on error
-	SCOPE_EXIT_CANCELLABLE(c1)
-	{
-		IoDeleteDevice(fdo);
-	};
-
-	// Attach device to device stack
-	auto nextdo = IoAttachDeviceToDeviceStack(fdo, pdo);
-	if (!nextdo)
-		return STATUS_DELETE_PENDING;
-
-	// Detach device on error
-	SCOPE_EXIT_CANCELLABLE(c2)
-	{
-		IoDetachDevice(nextdo);
-	};
-
-	// Register device interface
-	drv::sys_unicode_string_t link;
-	if (auto status = IoRegisterDeviceInterface(pdo, &function::GUID_DEVINTERFACE_MY_FUNCTION, 
-		nullptr, &link); nt_error(status))
-		return status;
-	
-	// No error, cancel scope exit blocks
-	c2.cancel();
-	c1.cancel();
-
-	// Construct C++ object and pass parameters to constructor
-	function_device_t::create_device_object(fdo, pdo, fdo, nextdo, link);
-	return STATUS_SUCCESS;
+	return function_device_t::create_and_attach_device_object(DriverObject, pdo);
 }
 ```
+
+The library provides a static function `device_t<Derived>::create_and_attach_device_object` which does the following:
+
+1. Creates a kernel device object, reserving the storage for a `Derived` class in the device object extension.
+2. Attaches it to the device stack.
+3. Constructs C++ object `Derived` in the device extension.
+4. Calls an optional `Derived::drv_final_construct` method on the created object. If it returns an error value, all steps are reverted and error code is returned to the caller.
+
+Parts of device initialization code that require the C++ object to exist but which can still fail can be placed into the optional `drv_final_construct` class member function:
+
+```cpp
+NTSTATUS function_device_t::drv_final_construct() noexcept
+{
+	PAGED_CODE();
+
+	drv::sys_unicode_string_t link;
+	auto status = IoRegisterDeviceInterface(pdo, &function::GUID_DEVINTERFACE_MY_FUNCTION, 
+		nullptr, &link); 
+	if (nt_success(status))
+		devinterface = link;
+		
+	return status;
+}
+```
+
+If `drv_final_construct` returns error, `create_and_attach_device_object` reverts all the steps (destroys C++ object, detaches device from device stack and deletes kernel device object) and returns the same error code.
 
 ### Destroying Device Objects
 

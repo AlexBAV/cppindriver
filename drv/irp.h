@@ -162,6 +162,7 @@ namespace drv
 			/// Get pointer to the current stack location
 			/// </summary>
 			/// <returns>IO_STACK_LOCATION *</returns>
+			[[nodiscard]]
 			auto current_stack_location() const noexcept
 			{
 				assert_non_empty();

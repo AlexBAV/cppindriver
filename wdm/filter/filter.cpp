@@ -22,16 +22,17 @@ class filter_device_t : public drv::basic_filter_device_t<filter_device_t>
 	NTSTATUS on_pnp_completion(PIRP irp) noexcept;
 
 public:
-	filter_device_t(PDEVICE_OBJECT pdo, PDEVICE_OBJECT fido, PDEVICE_OBJECT nextdo, std::wstring_view devinterface) noexcept :
-		drv::basic_filter_device_t<filter_device_t>{ pdo, fido, nextdo },
-		devinterface{ devinterface }
+	filter_device_t(PDEVICE_OBJECT pdo, PDEVICE_OBJECT fido, PDEVICE_OBJECT nextdo) noexcept :
+		drv::basic_filter_device_t<filter_device_t>{ pdo, fido, nextdo }
 	{
-		auto copiedflags = NextDO->Flags & (DO_BUFFERED_IO | DO_DIRECT_IO);
+		auto copiedflags = nextdo->Flags & (DO_BUFFERED_IO | DO_DIRECT_IO);
 		if (!copiedflags)
 			copiedflags = DO_DIRECT_IO;
-		ThisDO->Flags |= copiedflags | DO_POWER_PAGABLE;
-		ThisDO->Flags &= ~DO_DEVICE_INITIALIZING;
+		fido->Flags |= copiedflags | DO_POWER_PAGABLE;
+		fido->Flags &= ~DO_DEVICE_INITIALIZING;
 	}
+
+	NTSTATUS drv_final_construct() noexcept;
 
 	[[nodiscard]]
 	NTSTATUS drv_dispatch_device_control(drv::irp_t &&irp) noexcept;
@@ -49,33 +50,20 @@ NTSTATUS Driver_AddDevice(PDRIVER_OBJECT DriverObject, PDEVICE_OBJECT pdo)
 	// AddDevice is called at PASSIVE_LEVEL
 	PAGED_CODE();
 
-	PDEVICE_OBJECT fido;
-	if (auto status = IoCreateDevice(DriverObject, sizeof(filter_device_t), nullptr, FILE_DEVICE_UNKNOWN, FILE_DEVICE_SECURE_OPEN, false, &fido); nt_error(status))
-		return status;
+	return filter_device_t::create_and_attach_device_object(DriverObject, pdo);
+}
 
-	SCOPE_EXIT_CANCELLABLE(c1)
-	{
-		IoDeleteDevice(fido);
-	};
-
-	auto nextdo = IoAttachDeviceToDeviceStack(fido, pdo);
-	if (!nextdo)
-		return STATUS_DELETE_PENDING;
-
-	SCOPE_EXIT_CANCELLABLE(c2)
-	{
-		IoDetachDevice(nextdo);
-	};
+NTSTATUS filter_device_t::drv_final_construct() noexcept
+{
+	PAGED_CODE();
 
 	drv::sys_unicode_string_t link;
-	if (auto status = IoRegisterDeviceInterface(pdo, &filter::GUID_DEVINTERFACE_MY_FILTER, nullptr, &link); nt_error(status))
-		return status;
+	auto status = IoRegisterDeviceInterface(pdo(), &filter::GUID_DEVINTERFACE_MY_FILTER, nullptr, &link); 
 
-	c2.cancel();
-	c1.cancel();
-
-	filter_device_t::create_device_object(fido, pdo, fido, nextdo, link);
-	return STATUS_SUCCESS;
+	if (nt_success(status))
+		devinterface = link;
+		
+	return status;
 }
 
 /// <summary>
@@ -148,5 +136,5 @@ NTSTATUS filter_device_t::drv_dispatch_pnp(drv::irp_t &&irp) noexcept
 		return from_device_object(DeviceObject)->on_pnp_completion(Irp);
 	});
 
-	return std::move(irp).call_driver(NextDO);
+	return std::move(irp).call_driver(next_do());
 }
