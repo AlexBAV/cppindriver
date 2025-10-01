@@ -246,7 +246,7 @@ extern "C" NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, [[maybe_unused]] PU
 inline void init_dispatch_routines(PDRIVER_OBJECT DriverObject) noexcept
 {
 	// Set dispatch routines
-	sr::fill(sr::subrange(DriverObject->MajorFunction, DriverObject->MajorFunction + IRP_MJ_MAXIMUM_FUNCTION + 1), [](PDEVICE_OBJECT DeviceObject, PIRP Irp) noexcept
+	sr::fill(DriverObject->MajorFunction, [](PDEVICE_OBJECT DeviceObject, PIRP Irp)
 	{
 		return static_cast<IDevice *>(DeviceObject->DeviceExtension)->drv_dispatch(Irp);
 	});
