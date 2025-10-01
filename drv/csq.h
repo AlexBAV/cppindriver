@@ -15,28 +15,20 @@ namespace drv
 {
 	namespace details
 	{
-		template<class Derived>
-		class cancel_safe_queue
+		/// <summary>
+		/// Holds a list of IRPs
+		/// </summary>
+		class irp_list
 		{
-			IO_CSQ queue;
-			KSPIN_LOCK lock;
 			effective_db_list<IRP, list_entry<IRP, offsetof(IRP, Tail.Overlay.ListEntry)>> list;
 
-			static cancel_safe_queue &get(IO_CSQ *ptr) noexcept
+		public:
+#if defined(_DEBUG)
+			~irp_list()
 			{
-				return *reinterpret_cast<cancel_safe_queue *>(reinterpret_cast<std::byte *>(ptr) - offsetof(cancel_safe_queue, queue));
+				assert(list.empty());
 			}
-
-			decltype(auto) derived(this auto &self) noexcept
-			{
-				return static_cast<Derived &>(self);
-			}
-
-			static decltype(auto) derived(IO_CSQ *ptr) noexcept
-			{
-				return get(ptr).derived();
-			}
-
+#endif
 			NTSTATUS on_insert_impl(PIRP irp, [[maybe_unused]] void *context) noexcept
 			{
 				list.add_tail(irp);
@@ -57,8 +49,72 @@ namespace drv
 
 				return next;
 			}
+		};
+
+		/// <summary>
+		/// Holds a single IRP
+		/// </summary>
+		class single_irp
+		{
+			PIRP stored{};
+		public:
+#if defined(_DEBUG)
+			~single_irp()
+			{
+				assert(!stored);
+			}
+#endif
+
+			NTSTATUS on_insert_impl(PIRP irp, [[maybe_unused]] void *context) noexcept
+			{
+				assert(!stored);
+				stored = irp;
+				return STATUS_SUCCESS;
+			}
+
+			void on_remove_impl([[maybe_unused]] PIRP irp) noexcept
+			{
+				assert(stored == irp);
+				stored = {};
+			}
+
+			PIRP on_peek_impl(PIRP irp, void *context) noexcept
+			{
+				if (!stored || irp)
+					return {};
+
+				if (context && IoGetCurrentIrpStackLocation(stored)->FileObject != context) [[unlikely]]
+					return {};
+
+				return std::exchange(stored, {});
+			}
+		};
+
+		template<class Derived, class IrpStorage = irp_list>
+		class cancel_safe_queue : protected IrpStorage
+		{
+			IO_CSQ queue;
+			KSPIN_LOCK lock;
+			
+			//
+			static cancel_safe_queue &get(IO_CSQ *ptr) noexcept
+			{
+				return *reinterpret_cast<cancel_safe_queue *>(reinterpret_cast<std::byte *>(ptr) - offsetof(cancel_safe_queue, queue));
+			}
+
+			decltype(auto) derived(this auto &self) noexcept
+			{
+				return static_cast<Derived &>(self);
+			}
+
+			static decltype(auto) derived(IO_CSQ *ptr) noexcept
+			{
+				return get(ptr).derived();
+			}
 
 		public:
+			using base_queue = cancel_safe_queue;
+
 			cancel_safe_queue() noexcept
 			{
 				KeInitializeSpinLock(&lock);
@@ -111,9 +167,20 @@ namespace drv
 			}
 		};
 
-		class cancel_safe_queue_default : public cancel_safe_queue<cancel_safe_queue_default>
+		/// <summary>
+		/// Default queue implementation (completes IRP with STATUS_CANCELLED on cancel)
+		/// </summary>
+		/// <typeparam name="IrpStorage"></typeparam>
+		template<class IrpStorage = irp_list>
+		class cancel_safe_queue_default : public cancel_safe_queue<cancel_safe_queue_default<IrpStorage>, IrpStorage>
 		{
 		};
+	}
+
+	namespace storage_policy
+	{
+		using details::irp_list;
+		using details::single_irp;
 	}
 
 	using details::cancel_safe_queue;

@@ -85,7 +85,7 @@ class function_device_t : public drv::device_t<function_device_t>
 {
 	PDEVICE_OBJECT pdo, nextdo;
 	drv::unicode_string_t devinterface;
-	drv::cancel_safe_queue_default in_queue, out_queue;
+	drv::cancel_safe_queue_default<> in_queue, out_queue;
 	std::atomic<int> opened_count{};
 	static_buffer buffer;
 	wil::kernel_spin_lock buffer_lock;

@@ -84,10 +84,10 @@ namespace drv
 			/// <param name="information">Completion information</param>
 			/// <returns>The same as passed status</returns>
 			[[nodiscard]]
-			NTSTATUS complete_irp_and_release_remove_lock(irp_t &&irp, NTSTATUS status, ULONG_PTR information = 0) noexcept
+			NTSTATUS complete_irp_and_release_remove_lock(irp_t &&irp, NTSTATUS status, ULONG_PTR information = 0, CCHAR priority_boost = IO_NO_INCREMENT) noexcept
 			{
 				const auto i = irp.tag();
-				auto result = std::move(irp).complete(status, information);
+				auto result = std::move(irp).complete(status, information, priority_boost);
 				this->release_remove_lock(i);
 				return result;
 			}
@@ -141,13 +141,24 @@ namespace drv
 			}
 
 			/// <summary>
-			/// Delete the kernel device object and this
+			/// Release remove lock, wait for it and delete the kernel device object and this
 			/// </summary>
 			/// <param name="tag">Tag used to acquire remove lock</param>
 			[[nodiscard]]
 			void delete_device(void *tag) noexcept
 			{
 				IoReleaseRemoveLockAndWait(&this->RemoveLock, tag);
+				auto obj = this->ThisDO;
+				std::destroy_at(static_cast<Derived *>(this));
+				IoDeleteDevice(obj);
+			}
+
+			/// <summary>
+			/// Delete the kernel device object and this
+			/// </summary>
+			[[nodiscard]]
+			void delete_device() noexcept
+			{
 				auto obj = this->ThisDO;
 				std::destroy_at(static_cast<Derived *>(this));
 				IoDeleteDevice(obj);
@@ -273,13 +284,19 @@ namespace drv
 				return std::construct_at(from_device_object(pdo), std::forward<Args>(args)...);
 			}
 
+			/// <summary>
+			/// Create device object, attaches it to device stack and construct a C++ device object
+			/// </summary>
+			/// <param name="DeviceType">Kernel device type</param>
+			/// <param name="DriverObject">Driver object</param>
+			/// <param name="pdo">Physical device object</param>
+			/// <param name="...args">Any parameters to pass to the constructor</param>
+			/// <returns>Status code</returns>
 			template<class...Args>
-			static NTSTATUS create_and_attach_device_object(PDRIVER_OBJECT DriverObject, PDEVICE_OBJECT pdo, Args &&...args) noexcept
+			static NTSTATUS create_and_attach_device_object(ULONG DeviceType, PDRIVER_OBJECT DriverObject, PDEVICE_OBJECT pdo, Args &&...args) noexcept
 			{
-				PAGED_CODE();
-
 				PDEVICE_OBJECT fido;
-				if (auto status = IoCreateDevice(DriverObject, sizeof(Derived), nullptr, FILE_DEVICE_UNKNOWN, FILE_DEVICE_SECURE_OPEN, false, &fido); nt_error(status))
+				if (auto status = IoCreateDevice(DriverObject, sizeof(Derived), nullptr, DeviceType, FILE_DEVICE_SECURE_OPEN, false, &fido); nt_error(status))
 					return status;
 
 				SCOPE_EXIT_CANCELLABLE(c1)
@@ -315,6 +332,19 @@ namespace drv
 				c1.cancel();
 
 				return STATUS_SUCCESS;
+			}
+
+			/// <summary>
+			/// Create device object (with type FILE_DEVICE_UNKNOWN), attaches it to device stack and construct a C++ device object
+			/// </summary>
+			/// <param name="DriverObject">Driver object</param>
+			/// <param name="pdo">Physical device object</param>
+			/// <param name="...args">Any parameters to pass to the constructor</param>
+			/// <returns>Status code</returns>
+			template<class...Args>
+			static NTSTATUS create_and_attach_device_object(PDRIVER_OBJECT DriverObject, PDEVICE_OBJECT pdo, Args &&...args) noexcept
+			{
+				return create_and_attach_device_object(FILE_DEVICE_UNKNOWN, DriverObject, pdo, std::forward<Args>(args)...);
 			}
 		};
 
@@ -428,7 +458,7 @@ namespace drv
 		{
 			PAGED_CODE();
 			// Set dispatch routines
-			sr::fill(sr::subrange(DriverObject->MajorFunction, DriverObject->MajorFunction + IRP_MJ_MAXIMUM_FUNCTION + 1), [](PDEVICE_OBJECT DeviceObject, PIRP Irp) noexcept
+			sr::fill(DriverObject->MajorFunction, [](PDEVICE_OBJECT DeviceObject, PIRP Irp) noexcept
 			{
 				return static_cast<IDevice *>(DeviceObject->DeviceExtension)->drv_dispatch(Irp);
 			});

@@ -34,6 +34,7 @@ namespace drv
 			}
 
 		public:
+			irp_t() = default;
 			explicit irp_t(PIRP irp) noexcept :
 				irp{ irp }
 			{
@@ -122,15 +123,32 @@ namespace drv
 			/// </summary>
 			/// <param name="status">Status to set for IRP</param>
 			/// <param name="information">Additional information to set for IRP</param>
+			/// <param name="priority_boost">Thread priority boost</param>
 			/// <returns>Status passed in `status` parameter</returns>
 			[[nodiscard]]
-			NTSTATUS complete(NTSTATUS status, ULONG_PTR information = 0) && noexcept
+			NTSTATUS complete(NTSTATUS status, ULONG_PTR information = 0, CCHAR priority_boost = IO_NO_INCREMENT) && noexcept
 			{
 				assert_non_empty();
 				irp->IoStatus.Status = status;
 				irp->IoStatus.Information = information;
-				::IoCompleteRequest(std::move(*this).detach(), IO_NO_INCREMENT);
+				::IoCompleteRequest(std::move(*this).detach(), priority_boost);
 				return status;
+			}
+
+			/// <summary>
+			/// Complete the request
+			/// Must be called on an r-value reference
+			/// </summary>
+			/// <param name="status">Status to set for IRP</param>
+			/// <param name="priority_boost">Thread priority boost</param>
+			/// <returns>Status passed in `status` parameter</returns>
+			[[nodiscard]]
+			NTSTATUS complete(IO_STATUS_BLOCK status, CCHAR priority_boost = IO_NO_INCREMENT) && noexcept
+			{
+				assert_non_empty();
+				irp->IoStatus = status;
+				::IoCompleteRequest(std::move(*this).detach(), priority_boost);
+				return status.Status;
 			}
 
 			/// <summary>
@@ -167,6 +185,17 @@ namespace drv
 			{
 				assert_non_empty();
 				return IoGetCurrentIrpStackLocation(irp);
+			}
+
+			/// <summary>
+			/// Get pointer to the next stack location
+			/// </summary>
+			/// <returns></returns>
+			[[nodiscard]]
+			auto next_stack_location() const noexcept
+			{
+				assert_non_empty();
+				return IoGetNextIrpStackLocation(irp);
 			}
 
 			/// <summary>
@@ -208,6 +237,12 @@ namespace drv
 			{
 				assert_non_empty();
 				IoSetCompletionRoutine(irp, routine, context, invoke_on_success, invoke_on_error, invoke_on_cancel);
+			}
+
+			PDRIVER_CANCEL set_cancel_routine(PDRIVER_CANCEL cancel_routine = {}) noexcept
+			{
+				assert_non_empty();
+				return IoSetCancelRoutine(irp, cancel_routine);
 			}
 
 			/// <summary>
