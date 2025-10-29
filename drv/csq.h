@@ -86,7 +86,7 @@ namespace drv
 				if (context && IoGetCurrentIrpStackLocation(stored)->FileObject != context) [[unlikely]]
 					return {};
 
-				return std::exchange(stored, {});
+				return stored;
 			}
 		};
 
