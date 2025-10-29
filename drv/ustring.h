@@ -46,7 +46,6 @@ namespace drv
 			return sr::equal(l, r, {}, f, f);
 		}
 
-		// TODO: consider adding support for specifying pool type
 		template<class Base = UNICODE_STRING, pool_type pool = pool_type::NonPaged>
 		class pool_allocation_strategy : public Base
 		{

@@ -14,7 +14,7 @@
 class filter_device_t : public drv::basic_filter_device_t<filter_device_t>
 {
 	// Illustrate the usage of convenient UNICODE_STRING wrapper
-	drv::unicode_string_t devinterface;
+	drv::unicode_string_t<> devinterface;
 	// Illustrate the usage of std::atomic
 	std::atomic<int> counter{};
 

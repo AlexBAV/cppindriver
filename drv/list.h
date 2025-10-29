@@ -87,17 +87,6 @@ namespace drv::details
 #endif
 		}
 
-		constexpr void iAddHead(T *pElement) noexcept
-		{
-			auto *pCur = to_link(pElement);
-			auto *pFirst = nextl(&head);
-
-			nextl(pCur) = pFirst;
-			prevl(pCur) = &head;
-			prevl(pFirst) = pCur;
-			nextl(&head) = pCur;
-		}
-
 	public:
 		using value_type = T;
 
@@ -161,7 +150,13 @@ namespace drv::details
 
 		constexpr void add_head(T *pElement) noexcept
 		{
-			iAddHead(pElement);
+			auto *pCur = to_link(pElement);
+			auto *pFirst = nextl(&head);
+
+			nextl(pCur) = pFirst;
+			prevl(pCur) = &head;
+			prevl(pFirst) = pCur;
+			nextl(&head) = pCur;
 		}
 
 		constexpr void insert_before(T *pElement, T *before) noexcept
@@ -285,7 +280,7 @@ namespace drv::details
 				assert(in_list(pElement));
 
 				iRemove(pElement);
-				iAddHead(pElement);
+				add_head(pElement);
 			}
 		}
 
